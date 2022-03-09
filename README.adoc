@@ -1,0 +1,180 @@
+= MySecureShell docker image for Kyso
+
+This container provides a sftp server managed with
+https://github.com/mysecureshell/mysecureshell[mysecureshell] built to be
+configured using environment variables and files inside the `/fileSecrets`
+directory.
+
+The service is prepared to configure multiple users that can validate access
+using passwords and ssh keys.
+
+All the files read or writen will have the same UID and GID (they will be taken
+from enviroment variables, if present, or from the owner and group of the
+`/sftp` volume); the entrypoint script will validate that none of them is the
+`root` id (`0`)  and all the users will use the same `UID` and `GID`.
+
+== Environment variables
+
+- `MYSSH_SFTP_UID`: integer, if not found it is taken from the `/sftp` owner
+
+- `MYSSH_SFTP_GID`: integer, if not found it is taken from the `/sftp` group
+
+- `MYSSH_HOST_KEYS`: name of the mime text file that contains the server public
+  and private host keys (must contain 8 files, the file can be generated using
+  the container); the file should be accesible inside the container's
+  `/fileSecrets` directory.
+
+- `MYSSH_USER_KEYS`: name of the text file used to generate each user
+  `authorized_keys` file; the file should be accesible inside the container's
+  `/fileSecrets` directory.
++
+The file contains lines of the form `user:authorized_keys_line` and while we
+will generate an `authorized_keys` file for all the users included on this file
+it will only be used if the user also appears on the `MYSSH_USER_PASS` file.
+
+- `MYSSH_USER_PASS`: name of the text file used to add users to the container
+  system; the file should be accesible inside the container's `/fileSecrets`
+  directory.
++
+The file includes lines of the form `user:password`, if a user has an empty
+password the user will not be able to log on the `sftp` server without using an
+ssh key (the user is not disabled, but the `sshd` daemon is configured to deny
+access to users with empty passwords).
+
+== Capabilities
+
+To make the `sftp-who` command work the container needs the `IPC_OWNER`
+_capability_, the local management script adds it when launching the container
+and on the `k8s.yaml` file can be added on the `capabilities` section.
+
+== Local container management script
+
+To use the sftp server locally simply clone the repository and use the included
+management script.
+
+To initialize the system call the script with the `init` argument and the list
+of users to use:
+
+[source,shell]
+----
+$ ./bin/docker-myssh.sh init $(id -un) test01 user02
+----
+
+The previous call creates an empty `sftp` directory that will be mounted by the
+container to write the user files and also creates a `fileSecrets` directory
+with 4 files:
+
+[source,shell]
+----
+$ tree fileSecrets sftp
+fileSecrets
+├── host_keys.txt
+├── user_data.tar
+├── user_keys.txt
+└── user_pass.txt
+sftp
+
+0 directories, 4 files
+----
+
+The `host_keys.txt` file is the output of executing the following order:
+
+[source,shell]
+----
+% IMAGE="registry.agilecontent.com/docker/mysecureshell/master"
+% docker run --rm $IMAGE host-keys > host_keys.txt
+----
+
+which basically regenerates the server host keys and generates a mime file that
+contains all of them.
+
+The `user_data.tar` contains the ssh public and private keys for each user (the
+rsa keys appear two times, the version ending in `.pem` is the same private key
+exported in the legacy PEM format, which is required by old libraries, i.e. the
+one we use in Java to manage sftp connections) and the `user_keys.txt` and the
+`user_pass.txt` files, which have the following content:
+
+- the `user_pass.txt` contains lines of the form `user:pass` where the `pass`
+  is a _randomly_ generated password
+
+- the `user_keys.txt` contains lines of the form `user:ssh-ed25519 XXX...`
+  and `user:ssh-rsa YYY...` where the contents after the `:` are the contents
+  of the `id_ed255519-$user.pub` and `id_rsa-$user.pub` files of each user
+
+Note that the `user_pass.txt` and `user_keys.txt` can be modified to create
+additional files and enable pre-existing public keys (i. e. the user personal
+ssh public keys)
+
+To generate the `user_data.tar` the script executes the following order:
+
+[source,shell]
+----
+% IMAGE="registry.kyso.io/docker/mysecureshell/main"
+% docker run --rm $IMAGE users-tar LIST_OF_USERS > user_data.tar
+----
+
+As this option is useful to create new users, we've added an option to call it
+directly and edit our configurations with the resulting files:
+
+[source,shell]
+----
+% ./bin/docker-myssh.sh utar LIST_OF_USERS > /tmp/users.tar
+----
+
+Once we have the system ready to launch it we just need to start the container:
+
+[source,shell]
+----
+% ./bin/docker-myssh.sh start
+a1e275249ffc655115499ed3cc253cbb4c0e889959a53f5911d48a6abf38c6fc
+----
+
+By default the script publishes the ssh service on port `2022`, to use a
+different port create the container exporting the variable `MYSSH_PORT`, i.e.:
+
+[source,shell]
+----
+% ./bin/docker-myssh.sh rm
+myssh
+myssh
+% MYSSH_PORT="127.0.0.1:2222" ./bin/docker-myssh.sh start
+733ec3df0f125e2486a0d93d9c6dafdc8b894117f2de8dced4d718d27c367045
+% sudo ss -ltp | grep 2222
+LISTEN 0 4096 127.0.0.1:2222 0.0.0.0:* users:(("docker-proxy",pid=225778,fd=4))
+----
+
+To see the rest of the script options look into it and the help:
+
+[source,shell]
+----
+% bin/docker-myssh.sh
+Usage: ./bin/docker-myssh.sh {start|stop|status|restart|rm|logs|exec|build|pull|init|utar}
+----
+
+[NOTE]
+======
+
+Is important to remember that to add, remove or modify users we need to remove
+the container and start it again, because the provisioning step is executed
+only when the entrypoint script is run.
+
+======
+
+== Extra logging
+
+The container is configured to log the `MySecureShell` actions on the file
+`/sftp/logs/mysecureshell.log`, but the file is not created unless the
+`/sftp/logs` directory exists ... on a local installation it is enough to
+create the directory to enable its use (the `./sftp` is mounted inside the
+container) and renaming or removing the directory stops the logging.
+
+== Use in kubernetes
+
+See the `k8s.yaml` file for an example:
+
+[source,yaml]
+----
+include::examples/k8s.yaml[]
+----
+
+// vim: ts=2:sw=2:et

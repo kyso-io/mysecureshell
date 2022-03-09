@@ -1,0 +1,19 @@
+# Default mysecureshell configuration
+<Default>
+   # All users will have access their home directory under /sftp/data
+   Home       /sftp/data/$USER
+   # Log to a file inside /sftp/logs/ (only works when the directory exists)
+   LogFile     /sftp/logs/mysecureshell.log
+   # Force users to stay in their home directory
+   StayAtHome   true
+   # Hide Home PATH, it will be shown as /
+   VirtualChroot true
+   # Hide real file/directory owner (just change displayed permissions)
+   DirFakeUser  true
+   # Hide real file/directory group (just change displayed permissions)
+   DirFakeGroup  true
+   # We do not want users to keep forever their idle connection
+   IdleTimeOut  5m
+</Default>
+
+# vim: ts=2:sw=2:et

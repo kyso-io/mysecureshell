@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysecureshell
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysecureshell
+  template:
+    metadata:
+      labels:
+        app: mysecureshell
+    spec:
+      containers:
+      - name: mysecureshell
+        image: registry.kyso.io/docker/mysecureshell/main:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 22
+        securityContext:
+          add:
+          - IPC_OWNER
+        env:
+        - name: MYSSH_SFTP_UID
+          value: '2020'
+        - name: MYSSH_SFTP_GID
+          value: '2020'
+        - name: MYSSH_HOST_KEYS_FILE
+          value: sftp.host_keys.txt
+        - name: MYSSH_USER_KEYS_FILE
+          value: sftp.user_keys.txt
+        - name: MYSSH_USER_PASS_FILE
+          value: sftp.user_pass.txt
+        volumeMounts:
+        - mountPath: /fileSecrets
+          name: mysecureshell-fileSecrets
+          readOnly: true
+        - mountPath: /sftp
+          name: mysecureshell-sftpdir
+      volumes:
+      - name: mysecureshell-fileSecrets
+        secret:
+          secretName: mysecureshell-secrets
+      - name: mysecureshell-sftpdir
+        persistentVolumeClaim:
+          claimName: mysecureshell-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysecureshell-svc
+spec:
+  ports:
+  - port: 2020
+    protocol: TCP
+    targetPort: 22
+  selector:
+    app: mysecureshell
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysecureshell-pvc
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 8Gi
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysecureshell-secrets
+data:
+  sftp.host_keys: __HOST_KEYS_IN_BASE64__
+  sftp.user_keys.txt: __USER_KEYS_IN_BASE64__
+  sftp.user_pass.txt: __USER_PASS_IN_BASE64__
