@@ -60,7 +60,7 @@ We need at least a '$USER_KEYS_FILE' file to provision users.
 
 Call this script with the 'users-tar' argument and a list of usernames to
 retrieve a tar file with a valid '$USER_PASS_FILE', a
-'$USER_KEYS_FILE' and the corresponding pulic and private keys in RSA and
+'$USER_KEYS_FILE' and the corresponding public and private keys in RSA and
 ED25519 formats.
 EOF
         exit 1
