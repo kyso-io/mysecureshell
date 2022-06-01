@@ -117,17 +117,22 @@ _setup_user_pass() {
     cd "$tmpdir"
     ret="0"
     [ -d "$HOME_DIR" ] || mkdir "$HOME_DIR"
-    # Make sure the data dir can be managed by the sftp user and disable write
-    # permission on the directory to forbid remote sftp users to remove their
-    # own root dir (they have already done it)
+    # Make sure the data dir can be managed by the sftp user
     chown "$SFTP_UID:$SFTP_GID" "$HOME_DIR"
-    chmod 0555 "$HOME_DIR"
+    # Allow the user (and root) to create directories inside the $HOME_DIR, if
+    # we don't allow it the directory creation fails on EFS (AWS)
+    chmod 0755 "$HOME_DIR"
     # Create users
     echo "sftp:sftp:$SFTP_UID:$SFTP_GID:::/bin/false" >"newusers.txt"
     sed -n "/^[^#]/ { s/:/ /p }" "$USER_PASS" | while read -r _u _p; do
         echo "$_u:$_p:$SFTP_UID:$SFTP_GID::$HOME_DIR/$_u:$USER_SHELL_CMD"
     done >>"newusers.txt"
     newusers --badnames newusers.txt
+    # Disable write permission on the directory to forbid remote sftp users to
+    # remove their own root dir (they have already done it); we adjust that
+    # here to avoid issues with EFS (see before)
+    chmod 0555 "$HOME_DIR"
+    # Clean up the tmpdir
     cd "$opwd"
     rm -rf "$tmpdir"
     return "$ret"
