@@ -1,7 +1,10 @@
 include:
   - project: 'common/gitlab-ci'
-    ref: v0.4.14
+    ref: v0.4.15
     file: '/templates/dockerfile-build.yml'
 
 variables:
+  DOCKER_BUILDKIT: 1
   CODE_QUALITY_DISABLED: "true"
+  SAST_DISABLED: "true"
+  KYSO_IGNORE_BRANCH: "true"
