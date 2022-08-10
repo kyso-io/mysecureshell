@@ -3,6 +3,10 @@ include:
     ref: v0.4.24
     file: '/templates/dockerfile-build.yml'
 
+container_scanning:
+  variables:
+    DOCKER_IMAGE: "$CI_REGISTRY_IMAGE:$CI_COMMIT_TAG"
+
 variables:
   DOCKER_BUILDKIT: 1
   CODE_QUALITY_DISABLED: "true"
