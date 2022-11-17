@@ -1,0 +1,123 @@
+# The Role & RoleBinding objects are needed to use kubectl to manage the
+# secrets for us.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+ name: k8s-secret-account
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+ name: k8s-secret-account-binding
+subjects:
+- kind: ServiceAccount
+  name: default
+roleRef:
+ kind: Role
+ name: k8s-secret-account
+ apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysecureshell
+spec:
+  serviceName: mysecureshell
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysecureshell
+  template:
+    metadata:
+      labels:
+        app: mysecureshell
+    spec:
+      automountServiceAccountToken: true
+      initContainers:
+      - name: k8s-init
+        image: registry.kyso.io/docker/mysecureshell:latest
+        imagePullPolicy: Always
+        env:
+        - name: MYSSH_SFTP_UID
+          value: '2020'
+        - name: MYSSH_SFTP_GID
+          value: '2020'
+        - name: MYSSH_HOST_KEYS
+          value: host_keys.txt
+        - name: MYSSH_USER_KEYS
+          value: user_keys.txt
+        - name: MYSSH_USER_PASS
+          value: user_pass.txt
+        - name: MYSSH_USER_SIDS
+          value: user_sids.tgz
+        - name: MYSSH_SECRET_NAME
+          value: mysecureshell-secrets
+        args: [ 'k8s-init', 'user1', 'user2' ]
+        volumeMounts:
+        - mountPath: /fileSecrets
+          name: mysecureshell-filesecrets
+          readOnly: false
+      containers:
+      - name: sshd
+        image: registry.kyso.io/docker/mysecureshell:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 22
+        securityContext:
+          capabilities:
+            add:
+            - IPC_OWNER
+        env:
+        - name: MYSSH_SFTP_UID
+          value: '2020'
+        - name: MYSSH_SFTP_GID
+          value: '2020'
+        - name: MYSSH_HOST_KEYS
+          value: host_keys.txt
+        - name: MYSSH_USER_KEYS
+          value: user_keys.txt
+        - name: MYSSH_USER_PASS
+          value: user_pass.txt
+        - name: MYSSH_USER_SIDS
+          value: user_sids.tgz
+        - name: MYSSH_SECRET_NAME
+          value: mysecureshell-secrets
+        volumeMounts:
+        - mountPath: /fileSecrets
+          name: mysecureshell-filesecrets
+          readOnly: true
+        - mountPath: /sftp
+          name: mysecureshell-sftpdir
+      volumes:
+      - name: mysecureshell-filesecrets
+        emptyDir : {}
+      - name: mysecureshell-sftpdir
+        persistentVolumeClaim:
+          claimName: mysecureshell
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysecureshell
+spec:
+  ports:
+  - port: 2020
+    protocol: TCP
+    targetPort: 22
+  selector:
+    app: mysecureshell
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysecureshell
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 8Gi

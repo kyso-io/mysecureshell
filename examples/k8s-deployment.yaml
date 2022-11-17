@@ -14,42 +14,47 @@ spec:
     spec:
       containers:
       - name: mysecureshell
-        image: registry.kyso.io/docker/mysecureshell/main:latest
-        imagePullPolicy: IfNotPresent
+        image: registry.kyso.io/docker/mysecureshell:latest
+        imagePullPolicy: Always
         ports:
         - containerPort: 22
         securityContext:
-          add:
-          - IPC_OWNER
+          capabilities:
+            add:
+            - IPC_OWNER
         env:
         - name: MYSSH_SFTP_UID
           value: '2020'
         - name: MYSSH_SFTP_GID
           value: '2020'
-        - name: MYSSH_HOST_KEYS_FILE
-          value: sftp.host_keys.txt
-        - name: MYSSH_USER_KEYS_FILE
-          value: sftp.user_keys.txt
-        - name: MYSSH_USER_PASS_FILE
-          value: sftp.user_pass.txt
+        - name: MYSSH_SECRET_NAME
+          value: mysecureshell-secrets
+        - name: MYSSH_HOST_KEYS
+          value: host_keys.txt
+        - name: MYSSH_USER_KEYS
+          value: user_keys.txt
+        - name: MYSSH_USER_PASS
+          value: user_pass.txt
+        - name: MYSSH_USER_SIDS
+          value: user_sids.tgz
         volumeMounts:
         - mountPath: /fileSecrets
-          name: mysecureshell-fileSecrets
+          name: mysecureshell-filesecrets
           readOnly: true
         - mountPath: /sftp
           name: mysecureshell-sftpdir
       volumes:
-      - name: mysecureshell-fileSecrets
+      - name: mysecureshell-filesecrets
         secret:
           secretName: mysecureshell-secrets
       - name: mysecureshell-sftpdir
         persistentVolumeClaim:
-          claimName: mysecureshell-pvc
+          claimName: mysecureshell
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: mysecureshell-svc
+  name: mysecureshell
 spec:
   ports:
   - port: 2020
@@ -61,19 +66,10 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: mysecureshell-pvc
+  name: mysecureshell
 spec:
   accessModes:
   - ReadWriteOnce
   resources:
     requests:
       storage: 8Gi
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: mysecureshell-secrets
-data:
-  sftp.host_keys: __HOST_KEYS_IN_BASE64__
-  sftp.user_keys.txt: __USER_KEYS_IN_BASE64__
-  sftp.user_pass.txt: __USER_PASS_IN_BASE64__

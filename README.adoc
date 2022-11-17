@@ -2,62 +2,94 @@
 
 This container provides a sftp server managed with
 https://github.com/mysecureshell/mysecureshell[mysecureshell] built to be
-configured using environment variables and files inside the `/fileSecrets`
-directory.
+configured using environment variables and files inside a `CONF_DIR` directory
+(the PATH inside the container is `/fileSecrets`).
 
-The service is prepared to configure multiple users that can validate access
-using passwords and ssh keys.
+The service is prepared to configure multiple users that can validate
+themselves using passwords and ssh keys.
 
 All the files read or writen will have the same UID and GID (they will be taken
 from enviroment variables, if present, or from the owner and group of the
-`/sftp` volume); the entrypoint script will validate that none of them is the
-`root` id (`0`)  and all the users will use the same `UID` and `GID`.
+`/sftp` directory inside the container, that will be a volume); the entrypoint
+script will validate that none of them uses the `root` id (`0`) and all the
+users will use the same `UID` and `GID`.
+
+The container also has the ability create and manage a kubernetes secret with
+the configuration files that we need on the `CONF_DIR`, the idea is to create a
+secret to mount on the container in advance (`generate-k8s-secret` argument) or
+launch the service with an init container that manages the secrets for us
+(`k8s-init` argument).
+
+== Default values
+
+The base path for the `sftp` server inside the container is `/sftp` and the
+user homes are created under the `/sftp/data` path; the idea is to mount the
+`/sftp` directory from the outside with the right ownership (we don't mount the
+`/sftp/data` directory directly to be able to manipulate it from the container
+and use other subdirectories from the same mount point).
+
+The `/fileSecrets` directory is the place where we look for configuration
+files, the idea is to use it as a regular mount point when running with
+`docker` and as an `emptyDir` or `secret` when running in `kubernetes` (the
+`emptyDir` is used with init containers and the `secret` when we prefer to
+manage the configuration from the outside).
 
 == Environment variables
 
-- `MYSSH_SFTP_UID`: integer, if not found it is taken from the `/sftp` owner
+- `MYSSH_SFTP_UID`: integer, UID used for all SFTP files, if not provided the
+  default is taken from the `/sftp` owner (it can't be 0).
 
-- `MYSSH_SFTP_GID`: integer, if not found it is taken from the `/sftp` group
+- `MYSSH_SFTP_GID`: integer, GID used for all SFTP files, if not provided the
+  default is taken from the `/sftp` group (it can't be 0).
 
-- `MYSSH_HOST_KEYS`: name of the mime text file that contains the server public
-  and private host keys (must contain 8 files, the file can be generated using
-  the container); the file should be accesible inside the container's
-  `/fileSecrets` directory.
+- `MYSSH_SECRET_NAME`: name of the kubernetes secret to create or update, the
+  default value is `mysecureshell-secrets`.
 
-- `MYSSH_USER_KEYS`: name of the text file used to generate each user
-  `authorized_keys` file; the file should be accesible inside the container's
-  `/fileSecrets` directory.
+- `MYSSH_HOST_KEYS`: name of the file that contains the server public and
+  private host keys in mime format (must contain 8 key files, the mime archive
+  can be generated using the container); the file should be accesible inside the
+  container `/fileSecrets` directory. The default name is `host_keys.txt`.
+
+- `MYSSH_USER_KEYS`: name of the text file used to generate each user's
+  `authorized_keys` file; the file should be accesible inside the container
+  `/fileSecrets`. The default name is `user_keys.txt`.
 +
 The file contains lines of the form `user:authorized_keys_line` and while we
 will generate an `authorized_keys` file for all the users included on this file
 it will only be used if the user also appears on the `MYSSH_USER_PASS` file.
 
-- `MYSSH_USER_PASS`: name of the text file used to add users to the container
-  system; the file should be accesible inside the container's `/fileSecrets`
-  directory.
+- `MYSSH_USER_PASS`: name of the text file used to add users to the
+  container system; the file should be accesible inside the container
+  `/fileSecrets`.  The default name is `user_pass.txt`.
 +
 The file includes lines of the form `user:password`, if a user has an empty
-password the user will not be able to log on the `sftp` server without using an
+password the user will not be able to log on the `sftp` server without using a
 ssh key (the user is not disabled, but the `sshd` daemon is configured to deny
 access to users with empty passwords).
+
+- `MYSSH_USER_SIDS`: name of a tar file that contains the public and private
+  keys of the users; it is not really used by the container, the idea is to use
+  it to distribute the configuration data when everything is managed
+  automatically. The default name is `user_sids.tgz` (the extension is used to
+  decide which compression format to use).
 
 == Capabilities
 
 To make the `sftp-who` command work the container needs the `IPC_OWNER`
 _capability_, the local management script adds it when launching the container
-and on the `k8s.yaml` file can be added on the `capabilities` section.
+and on a kubernetes Pod it can be added to the `capabilities` section.
 
 == Local container management script
 
 To use the sftp server locally simply clone the repository and use the included
-management script.
+management script (`docker-myssh.sh`).
 
 To initialize the system call the script with the `init` argument and the list
-of users to use:
+of users to create or update:
 
 [source,shell]
 ----
-$ ./bin/docker-myssh.sh init $(id -un) test01 user02
+$ ./bin/docker-myssh.sh init "$(id -un)" test01 user02
 ----
 
 The previous call creates an empty `sftp` directory that will be mounted by the
@@ -69,59 +101,72 @@ with 4 files:
 $ tree fileSecrets sftp
 fileSecrets
 ├── host_keys.txt
-├── user_data.tar
 ├── user_keys.txt
-└── user_pass.txt
+├── user_pass.txt
+└── user_sids.tgz
 sftp
 
 0 directories, 4 files
 ----
 
-The `host_keys.txt` file is the output of executing the following order:
+The `host_keys.txt` is a mime file generated with `makemime` (the version
+included in `busybox`) that contains server keys generated using a call to
+`ssh-keygen -A`.
+
+The keys can be can be regenerated and exported executing the following order:
 
 [source,shell]
 ----
-% IMAGE="registry.agilecontent.com/docker/mysecureshell/master"
-% docker run --rm $IMAGE host-keys > host_keys.txt
+% IMAGE="registry.agilecontent.com/docker/mysecureshell"
+% docker run --rm "$IMAGE" gen-host-keys > fileSecrets/host_keys.txt
 ----
 
-which basically regenerates the server host keys and generates a mime file that
-contains all of them.
+The `user_pass.txt` file contains lines of the form `user:pass` where the `pass`
+is a _randomly_ generated password in cleartext.
 
-The `user_data.tar` contains the ssh public and private keys for each user (the
-rsa keys appear two times, the version ending in `.pem` is the same private key
-exported in the legacy PEM format, which is required by old libraries, i.e. the
-one we use in Java to manage sftp connections) and the `user_keys.txt` and the
-`user_pass.txt` files, which have the following content:
-
-- the `user_pass.txt` contains lines of the form `user:pass` where the `pass`
-  is a _randomly_ generated password
-
-- the `user_keys.txt` contains lines of the form `user:ssh-ed25519 XXX...`
-  and `user:ssh-rsa YYY...` where the contents after the `:` are the contents
-  of the `id_ed255519-$user.pub` and `id_rsa-$user.pub` files of each user
+The `user_keys.txt` contains lines of the form `user:ssh-ed25519 XXX...`
+and `user:ssh-rsa YYY...` where the contents after the `:` are the contents
+of the `id_ed255519-$user.pub` and `id_rsa-$user.pub` files of each user.
 
 Note that the `user_pass.txt` and `user_keys.txt` can be modified to create
 additional files and enable pre-existing public keys (i. e. the user personal
-ssh public keys)
+ssh public keys), although it is not recomended.
 
-To generate the `user_data.tar` the script executes the following order:
+The `user_sids.tgz` file contains the ssh public and private keys for each user
+(the rsa keys appear two times, the version ending in `.pem` is the same
+private key exported in the legacy PEM format, which is required by old
+libraries).
 
-[source,shell]
-----
-% IMAGE="registry.kyso.io/docker/mysecureshell/main"
-% docker run --rm $IMAGE users-tar LIST_OF_USERS > user_data.tar
-----
-
-As this option is useful to create new users, we've added an option to call it
-directly and edit our configurations with the resulting files:
+To generate a `user_data.tar` archive that contains new versions of all the
+previous files the user can execute the following order:
 
 [source,shell]
 ----
-% ./bin/docker-myssh.sh utar LIST_OF_USERS > /tmp/users.tar
+% IMAGE="registry.kyso.io/docker/mysecureshell"
+% docker run --rm "$IMAGE" gen-users-tar LIST_OF_USERS > user_data.tar
 ----
 
-Once we have the system ready to launch it we just need to start the container:
+And to get the file adding or removing users while keeping existing values the
+command to execute will be:
+
+[source,shell]
+----
+% IMAGE="registry.kyso.io/docker/mysecureshell"
+% docker run --rm "$IMAGE" -v "$(pwd)/fileSecrets:/fileSecrets,rw" \
+    export-users-tar LIST_OF_USERS > user_data.tar
+----
+
+[NOTE]
+======
+
+All the commands that get a list of users create the data for the new ones and
+remove the data from the ones not on the list, if we pass an updated
+`LIST_OF_USERS` their data will be reused or created and old ones will be
+removed.
+
+======
+
+Once we have the system ready to launch we just need to start the container:
 
 [source,shell]
 ----
@@ -143,20 +188,23 @@ myssh
 LISTEN 0 4096 127.0.0.1:2222 0.0.0.0:* users:(("docker-proxy",pid=225778,fd=4))
 ----
 
-To see the rest of the script options look into it and the help:
-
-[source,shell]
-----
-% bin/docker-myssh.sh
-Usage: ./bin/docker-myssh.sh {start|stop|status|restart|rm|logs|exec|build|pull|init|utar}
-----
+To see the rest of the script options call it without arguments.
 
 [NOTE]
 ======
 
-Is important to remember that to add, remove or modify users we need to remove
-the container and start it again, because the provisioning step is executed
-only when the entrypoint script is run.
+To add or remove users we have to options:
+
+- stop the container, call it with the `init` argument and the list of users we
+  want to add or keep (the ones not included will be removed) and start it
+  again.
+
+- use the `update-users-data` with the list of users we want (this command will
+  reload the `sshd` configuration without restarting the container).
+
+Note that if we change the configuration files by hand we need to restart the
+container, as the provisioning step is executed only when the entrypoint is
+called with the `k8s-sshd` or `sshd` argument (the last one is the default).
 
 ======
 
@@ -170,11 +218,126 @@ container) and renaming or removing the directory stops the logging.
 
 == Use in kubernetes
 
-See the `k8s.yaml` file for an example:
+=== `statefulset` + `initContainer`
+
+To deploy `myssh` using a `statefulset` with an `init` container to manage the
+secrets and dump them on an `emptydir` we can use the following objects:
 
 [source,yaml]
+.k8s-statefulset
 ----
-include::examples/k8s.yaml[]
+include::examples/k8s-statefulset.yaml[]
 ----
+
+We need to add the `Role` and `RoleBinding` to make things work as expected
+(the `init` container needs to be allowed to manage the secrets to get and set
+them).
+
+[NOTE]
+======
+
+If we use this model to manage the configuration files we have to make sure
+that the `init` container arguments are updated and re-deployed each time we
+want to add or remove users.
+
+If we want to use the `init` container but manage the users externally we have
+to remove the `LIST_OF_USERS` from the argument list of the `init` container
+(it will be left as `k8s-init`) and use one of the following options:
+
+1. create the secret calling `k8s-init` by hand:
+
+[source,sh]
+----
+IMAGE="registry.kyso.io/docker/mysecureshell"
+POD="k8s-secret"
+kubectl run --image $IMAGE --quiet -ti $POD -- k8s-init usr1 usr2
+kubectl delete pod "$POD"
+----
+
+2. create a new json secret and apply it to our namespace:
+
+[sourec,sh]
+----
+IMAGE="registry.kyso.io/docker/mysecureshell"
+POD="k8s-secret"
+kubectl run --image $IMAGE --quiet -ti $POD \
+  -- new-k8s-secret usr1 usr2 >/tmp/secret.yaml
+kubectl delete pod "$POD"
+kubectl apply -f /tmp/secret.yaml
+----
+
+If we choose this path, users can be added or removed updating the secret
+executing the following commands on the `myssh` pod when it is running (it also
+reloads the secure shell daemon to apply changes immediately):
+
+[source,sh]
+----
+kubectl exec statefulset/mysecureshell -c myssh -ti \
+  -- /entrypoint.sh update-k8s-users LIST_OF_USERS
+----
+
+Or, if the process is not running, calling `k8s-init` as before (if the secret
+already exists it is loaded before updating the users).
+
+======
+
+=== `deployment` + manual secrets management
+
+If we prefer to use a `deployment` with secrets to keep the configuration files
+we can use the following objects:
+
+[source,yaml]
+.k8s-deployment.yaml
+----
+include::examples/k8s-deployment.yaml[]
+----
+
+To create the secret run the `mysecureshell` container to generate the secrets
+in `json` format, add it to the namespace and create the deployment using the
+previous `yaml` file.
+
+Assumming that we are using the standard values for the environment variables
+the commands to run will be something like:
+
+[source,sh]
+----
+IMAGE="registry.kyso.io/docker/mysecureshell"
+POD="k8s-secret"
+kubectl run --image $IMAGE --quiet -ti $POD \
+  -- new-k8s-secret usr1 usr2 >/tmp/secret.json
+kubectl delete pod "$POD"
+kubectl apply -f /tmp/secret.json
+rm -f /tmp/secret.yaml
+kubectl apply -f k8s-deployment.yaml
+----
+
+As an alternative we can run a job that creates the secrets directly on
+kubernetes, add the deployment:
+
+[source,sh]
+----
+kubectl apply -f k8s-secret-job.yaml
+kubectl apply -f k8s-deployment.yaml
+----
+
+The contents of the job are:
+
+[source,yaml]
+.k8s-secret-job.yaml
+----
+include::examples/k8s-secret-job.yaml[]
+----
+
+Once the secret is available is a good idea to remove the job:
+
+[source,sh]
+----
+if [ "$(kubectl get secrets/mysecureshell-secrets -o name)" ]; then
+  kubectl delete -f k8s-secret-job.yaml
+fi
+----
+
+The advantage of the first approach is that we don't need to add the `Role` and
+`RoleBinding` to the default account (we manage the secrets outside the pods).
 
 // vim: ts=2:sw=2:et

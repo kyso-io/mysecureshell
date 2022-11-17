@@ -11,23 +11,18 @@ SCRIPT="$(readlink -f "$0")"
 SCRIPT_DIR="$(dirname "$SCRIPT")"
 WORK_DIR="$(readlink -f "$SCRIPT_DIR/..")"
 
+BASE_DIR="/sftp"
+CONF_DIR="/fileSecrets"
+
 HOST_KEYS="host_keys.txt"
 USER_KEYS="user_keys.txt"
 USER_PASS="user_pass.txt"
-USERS_TAR="user_data.tar"
 
-DOCKER_SFTP_PATH="/sftp"
-DOCKER_FILES_DIR="/fileSecrets"
-DOCKER_HOST_KEYS="$DOCKER_FILES_DIR/$HOST_KEYS"
-DOCKER_USER_KEYS="$DOCKER_FILES_DIR/$USER_KEYS"
-DOCKER_USER_PASS="$DOCKER_FILES_DIR/$USER_PASS"
-
-SERVER_SFTP_PATH="$WORK_DIR/sftp"
-SERVER_FILES_DIR="$WORK_DIR/fileSecrets"
-SERVER_HOST_KEYS="$SERVER_FILES_DIR/$HOST_KEYS"
-SERVER_USER_KEYS="$SERVER_FILES_DIR/$USER_KEYS"
-SERVER_USER_PASS="$SERVER_FILES_DIR/$USER_PASS"
-SERVER_USERS_TAR="$SERVER_FILES_DIR/$USERS_TAR"
+SRV_BASE_DIR="${WORK_DIR}${BASE_DIR}"
+SRV_CONF_DIR="${WORK_DIR}${CONF_DIR}"
+SRV_HOST_KEYS="${SRV_CONF_DIR}/${HOST_KEYS}"
+SRV_USER_KEYS="${SRV_CONF_DIR}/${USER_KEYS}"
+SRV_USER_PASS="${SRV_CONF_DIR}/${USER_PASS}"
 
 MYSSH_PORT="${MYSSH_PORT:=2022}"
 
@@ -47,39 +42,43 @@ _pull() {
 }
 
 _init() {
-  if [ ! -d "$SERVER_SFTP_PATH" ]; then
-    mkdir "$SERVER_SFTP_PATH"
+  if [ ! -d "$SRV_BASE_DIR" ]; then
+    mkdir "$SRV_BASE_DIR"
   fi
-  if [ ! -d "$SERVER_FILES_DIR" ]; then
-    mkdir "$SERVER_FILES_DIR"
+  if [ ! -d "$SRV_CONF_DIR" ]; then
+    mkdir "$SRV_CONF_DIR"
   fi
-  if [ ! -f "$SERVER_HOST_KEYS" ]; then
-    docker run --rm "$IMG_NAME" host-keys >"$SERVER_HOST_KEYS"
-  fi
-  if [ ! -f "$SERVER_USER_PASS" ]; then
-    if [ -n "$#" ]; then
-      docker run --rm "$IMG_NAME" users-tar "$@" >"$SERVER_USERS_TAR"
-    else
-      docker run --rm "$IMG_NAME" users-tar "$(id -un)" \
-        >"$SERVER_USERS_TAR"
-    fi
-    if [ -s "$SERVER_USERS_TAR" ]; then
-      cd "$SERVER_FILES_DIR"
-      tar xf "$SERVER_USERS_TAR" user_keys.txt user_pass.txt
-    fi
-  fi
-}
-
-_host_keys() {
-  docker run --rm "$IMG_NAME" host-keys
-}
-
-_utar() {
-  docker run --rm "$IMG_NAME" users-tar "$@"
+  [ "$#" -eq "0" ] && _users="$(id -un)" || _users="$*"
+  # shellcheck disable=SC2086
+  docker run --rm \
+    --env MYSSH_SFTP_UID="${MYSSH_SFTP_UID}" \
+    --env MYSSH_SFTP_GID="${MYSSH_SFTP_GID}" \
+    --env MYSSH_HOST_KEYS="${HOST_KEYS}" \
+    --env MYSSH_USER_KEYS="${USER_KEYS}" \
+    --env MYSSH_USER_PASS="${USER_PASS}" \
+    --volume "$SRV_BASE_DIR:$BASE_DIR:rw,z" \
+    --volume "$SRV_CONF_DIR:$CONF_DIR:rw,z" \
+    "$IMG_NAME" init $_users
 }
 
 _run() {
-  if [ ! -f "$SERVER_HOST_KEYS" ] || [ ! -f "$SERVER_USER_PASS" ]; then
+  docker run --rm -ti \
+    --cap-add "IPC_OWNER" \
+    --publish "$MYSSH_PORT:22" \
+    --env MYSSH_SFTP_UID="${MYSSH_SFTP_UID}" \
+    --env MYSSH_SFTP_GID="${MYSSH_SFTP_GID}" \
+    --env MYSSH_HOST_KEYS="${HOST_KEYS}" \
+    --env MYSSH_USER_KEYS="${USER_KEYS}" \
+    --env MYSSH_USER_PASS="${USER_PASS}" \
+    --volume "$SRV_BASE_DIR:$BASE_DIR:rw,z" \
+    --volume "$SRV_CONF_DIR:$CONF_DIR:rw,z" \
+    --name "$CNAME" \
+    "$IMG_NAME" "$@"
+}
+
+_run_daemon() {
+  if [ ! -f "$SRV_HOST_KEYS" ] || [ ! -f "$SRV_USER_KEYS" ] ||
+    [ ! -f "$SRV_USER_PASS" ]; then
     echo "Required files missing, call '$0 init USERS_LIST' to create them"
     return 1
   fi
@@ -91,10 +90,8 @@ _run() {
     --env MYSSH_HOST_KEYS="${HOST_KEYS}" \
     --env MYSSH_USER_KEYS="${USER_KEYS}" \
     --env MYSSH_USER_PASS="${USER_PASS}" \
-    --volume "$SERVER_SFTP_PATH:$DOCKER_SFTP_PATH:rw,z" \
-    --volume "$SERVER_HOST_KEYS:$DOCKER_HOST_KEYS:ro,z" \
-    --volume "$SERVER_USER_KEYS:$DOCKER_USER_KEYS:ro,z" \
-    --volume "$SERVER_USER_PASS:$DOCKER_USER_PASS:ro,z" \
+    --volume "$SRV_BASE_DIR:$BASE_DIR:rw,z" \
+    --volume "$SRV_CONF_DIR:$CONF_DIR:rw,z" \
     --restart always \
     --name "$CNAME" \
     "$IMG_NAME" "$@"
@@ -125,7 +122,7 @@ _status() {
 _start() {
   _st="$(_inspect_status)"
   if [ -z "$_st" ]; then
-    _run "$@"
+    _run_daemon "$@"
   elif [ "$_st" != "running" ] && [ "$_st" != "restarting" ]; then
     docker start "${CNAME}"
   fi
@@ -157,7 +154,7 @@ _exec() {
 
 _usage() {
   cat <<EOF
-Usage: $0 {start|stop|status|restart|rm|logs|exec|build|pull|init|hkeys|utar}
+Usage: $0 {start|stop|status|restart|rm|run|logs|exec|build|pull|init}
 EOF
   exit 0
 }
@@ -176,6 +173,15 @@ restart)
   shift
   _restart "$@"
   ;;
+run)
+  shift
+  # run the container removing the default ARGS if no argument is passed
+  if [ "$*" ]; then
+    _run "$@"
+  else
+    _run ""
+  fi
+  ;;
 rm) _rm ;;
 logs)
   shift
@@ -190,14 +196,6 @@ pull) _pull ;;
 init)
   shift
   _init "$@"
-  ;;
-hkeys)
-  shift
-  _host_keys
-  ;;
-utar)
-  shift
-  _utar "$@"
   ;;
 *) _usage ;;
 esac

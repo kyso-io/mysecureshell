@@ -20,12 +20,17 @@ RUN apk update &&\
  sed -i -e "s|^.*\(AuthorizedKeysFile\).*$|\1 /etc/ssh/auth_keys/%u|"\
  /etc/ssh/sshd_config &&\
  mkdir /etc/ssh/auth_keys &&\
- cat /dev/null > /etc/motd &&\
+ : >/etc/motd &&\
+ mkdir /fileSecrets &&\
  add-shell '/usr/bin/mysecureshell' &&\
  rm -rf /var/cache/apk/*
 COPY sftp_config /etc/ssh/
+RUN KUBECTL_VERSION="1.22.15" && os="linux" && arch="amd64" &&\
+ url="https://dl.k8s.io/release/v$KUBECTL_VERSION/bin/$os/$arch/kubectl" &&\
+ wget -q -O "/usr/local/bin/kubectl" "$url" &&\
+ chmod +x "/usr/local/bin/kubectl"
 COPY entrypoint.sh /
 EXPOSE 22
 VOLUME /sftp
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["server"]
+CMD ["sshd"]
