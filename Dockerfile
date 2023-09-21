@@ -1,5 +1,6 @@
-ARG ALPINE_VERSION
-FROM registry.kyso.io/docker/alpine:$ALPINE_VERSION as builder
+ARG ALPINE_VERSION=3.16.2
+
+FROM alpine:$ALPINE_VERSION as builder
 LABEL maintainer="Sergio Talens-Oliag <sto@kyso.io>"
 RUN apk update &&\
  apk add --no-cache alpine-sdk git musl-dev &&\
@@ -11,7 +12,7 @@ RUN apk update &&\
  rm -rf /var/cache/apk/*
 COPY sftp_config /etc/ssh/
 
-FROM registry.kyso.io/docker/alpine:$ALPINE_VERSION
+FROM alpine:$ALPINE_VERSION
 LABEL maintainer="Sergio Talens-Oliag <sto@kyso.io>"
 COPY --from=builder /usr/bin/mysecureshell /usr/bin/mysecureshell
 COPY --from=builder /usr/bin/sftp-* /usr/bin/
